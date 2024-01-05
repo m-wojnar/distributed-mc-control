@@ -6,8 +6,10 @@ import numpy as np
 from tqdm import tqdm
 
 
-def initial_q():
-    return defaultdict(float)
+def initial_policy():
+    q = defaultdict(float)
+    n = defaultdict(int)
+    return q, n
 
 
 def policy(q, state, actions, epsilon):
@@ -20,7 +22,6 @@ def policy(q, state, actions, epsilon):
 
 def play_episodes(env, q, epsilon, n_episodes, bins, actions):
     trajectories = []
-    returns = []
 
     for episode in range(n_episodes):
         trajectories.append([])
@@ -29,7 +30,7 @@ def play_episodes(env, q, epsilon, n_episodes, bins, actions):
         while True:
             state = tuple(map(lambda x: np.digitize(*x), zip(state, bins)))
             probs = policy(q, state, actions, epsilon)
-            action = np.random.choice(actions, p=list(probs.values()))
+            action = np.random.choice(actions, p=list(probs.values())).item()
 
             env.render()
             next_state, reward, terminated, truncated, _ = env.step(action)
@@ -40,43 +41,41 @@ def play_episodes(env, q, epsilon, n_episodes, bins, actions):
             if terminated or truncated:
                 break
 
-        returns.append(sum(map(lambda x: x[2], trajectories[-1])))
-
-    return trajectories, returns
+    return trajectories
 
 
-def improve_policy(q, trajectories, gamma):
-    q = q.copy()
+def calculate_updates(trajectories, gamma):
+    updates = []
+    returns = []
 
     for trajectory in trajectories:
+        first_occurrences = defaultdict(int)
+
+        for i, (state, action, _) in enumerate(trajectory):
+            if (state, action) not in first_occurrences:
+                first_occurrences[state, action] = i
+
+        updates.append({})
         g = 0
 
-        for i in range(len(trajectory) - 1, -1, -1):
-            state, action, reward = trajectory[i]
+        for i, (state, action, reward) in enumerate(reversed(trajectory)):
             g = gamma * g + reward
 
-            for j in range(i):
-                if trajectory[j][0] == state and trajectory[j][1] == action:
-                    break
-            else:
-                q[state, action] += g
+            if i == first_occurrences[state, action]:
+                updates[-1][state, action] = g
 
-    return q
+        returns.append(g)
+
+    return updates, returns
 
 
-def combine_policies(qs):
-    q = defaultdict(float)
-    n = defaultdict(int)
-
-    for q_ in qs:
-        for (state, action), value in q_.items():
-            q[state, action] += value
+def update_policy(q, n, updates):
+    for update in updates:
+        for (state, action), g in update.items():
             n[state, action] += 1
+            q[state, action] += (g - q[state, action]) / n[state, action]
 
-    for state, action in q:
-        q[state, action] /= n[state, action]
-
-    return q
+    return q, n
 
 
 if __name__ == '__main__':
@@ -87,43 +86,43 @@ if __name__ == '__main__':
     actions = list(range(env.action_space.n))
     bins = [
         np.linspace(-4.8, 4.8, 5),
-        np.linspace(-4, 4, 10),
-        np.linspace(-0.419, 0.419, 20),
+        np.linspace(-2, 2, 7),
+        np.linspace(-0.419, 0.419, 11),
         np.linspace(-2, 2, 15)
     ]
     gamma = 1.0
 
     # initial policy
-    q = initial_q()
+    q, n = initial_policy()
 
     # number of episodes and improvement steps
     n_episodes = 100
-    k = 100
+    improvement_steps = 100
+    parallelism = 5
     returns = []
 
     # decaying epsilon
-    epsilon = np.logspace(0, -2, k, base=10)
+    epsilon = np.logspace(0, -2, improvement_steps, base=10)
 
     for e in (pbar := tqdm(epsilon)):
         # --- MONTE CARLO NODES ---
         trajectories = []
 
-        for _ in range(1):  # <- in parallel
-            new_trajectories, new_returns = play_episodes(env, q, e, n_episodes, bins, actions)
-
-            trajectories.append(new_trajectories)
-            returns.append(np.mean(new_returns))
-
-            pbar.set_description(f'epsilon: {e:.3f}, mean return: {returns[-1]:.3f}')
+        for _ in range(parallelism):  # <- in parallel
+            trajectories.append(play_episodes(env, q, e, n_episodes, bins, actions))
 
         # --- REDUCER NODES ---
-        qs = []
+        updates = []
 
-        for t in trajectories:  # <- in parallel
-            qs.append(improve_policy(q, t, gamma))
+        for trajectory in trajectories:  # <- in parallel
+            new_updates, new_returns = calculate_updates(trajectory, gamma)
+            updates += new_updates
+            returns.append(np.mean(new_returns))
+
+        pbar.set_description(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
 
         # --- MASTER ---
-        q = combine_policies(qs)
+        q, n = update_policy(q, n, updates)
 
     # plot training results
     plt.plot(returns)
