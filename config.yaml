@@ -1,0 +1,6 @@
+lithops:
+    backend: gcp_functions
+
+gcp:
+    region : europe-west1
+    credentials_path : <FULL_PATH_TO_CREDENTIALS_JSON>
