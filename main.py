@@ -4,6 +4,7 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
+from lithops import multiprocessing as mp
 
 
 def initial_policy():
@@ -78,6 +79,21 @@ def update_policy(q, n, updates):
     return q, n
 
 
+def worker_function(params):
+    env, q, epsilon, n_episodes, bins, actions, gamma = params
+    return play_episodes(env, q, epsilon, n_episodes, bins, actions), gamma
+
+
+def reducer_function(results):
+    updates = []
+    returns = []
+    for trajectory, gamma in results:
+        new_updates, new_returns = calculate_updates(trajectory, gamma)
+        updates += new_updates
+        returns.append(np.mean(new_returns))
+    return updates, returns
+
+
 if __name__ == '__main__':
     # --- MASTER ---
 
@@ -104,22 +120,16 @@ if __name__ == '__main__':
     # decaying epsilon
     epsilon = np.logspace(0, -2, improvement_steps, base=10)
 
-    for e in (pbar := tqdm(epsilon)):
-        # --- MONTE CARLO NODES ---
-        trajectories = []
+    with mp.Pool() as pool:
+        for e in (pbar := tqdm(epsilon)):
+            params_list = [(env, q, e, n_episodes, bins, actions, gamma)] * parallelism
+            results = pool.map(worker_function, params_list)
 
-        for _ in range(parallelism):  # <- in parallel
-            trajectories.append(play_episodes(env, q, e, n_episodes, bins, actions))
-
-        # --- REDUCER NODES ---
-        updates = []
-
-        for trajectory in trajectories:  # <- in parallel
-            new_updates, new_returns = calculate_updates(trajectory, gamma)
-            updates += new_updates
-            returns.append(np.mean(new_returns))
+        updates, new_returns = reducer_function(results)
+        returns.append(np.mean(new_returns))
 
         pbar.set_description(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
+        print(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
 
         # --- MASTER ---
         q, n = update_policy(q, n, updates)
