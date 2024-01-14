@@ -4,9 +4,9 @@ os.environ['LITHOPS_CONFIG_FILE'] = os.path.join(os.getcwd(), 'config.yaml')
 from collections import defaultdict
 
 import gymnasium as gym
+import lithops
 import matplotlib.pyplot as plt
 import numpy as np
-from lithops import ServerlessExecutor
 
 
 def initial_policy():
@@ -15,7 +15,7 @@ def initial_policy():
     return q, n
 
 
-def policy(q, state, actions, epsilon):
+def policy(q, state, epsilon):
     values = np.array([q[state, action] for action in actions])
     probs = (values == np.max(values)).astype(float)
     probs /= np.sum(probs)
@@ -23,7 +23,7 @@ def policy(q, state, actions, epsilon):
     return dict(zip(actions, probs))
 
 
-def play_episodes(env, q, epsilon, n_episodes, bins, actions):
+def play_episodes(q, epsilon):
     trajectories = []
 
     for episode in range(n_episodes):
@@ -32,7 +32,7 @@ def play_episodes(env, q, epsilon, n_episodes, bins, actions):
 
         while True:
             state = tuple(map(lambda x: np.digitize(*x), zip(state, bins)))
-            probs = policy(q, state, actions, epsilon)
+            probs = policy(q, state, epsilon)
             action = np.random.choice(actions, p=list(probs.values())).item()
 
             env.render()
@@ -47,7 +47,7 @@ def play_episodes(env, q, epsilon, n_episodes, bins, actions):
     return trajectories
 
 
-def calculate_updates(trajectories, gamma):
+def calculate_updates(trajectories):
     updates = []
     returns = []
 
@@ -81,23 +81,8 @@ def update_policy(q, n, updates):
     return q, n
 
 
-def worker_function(params):
-    env, q, epsilon, n_episodes, bins, actions, gamma = params
-    return play_episodes(env, q, epsilon, n_episodes, bins, actions), gamma
-
-
-def reducer_function(results):
-    updates = []
-    returns = []
-    for trajectory, gamma in results:
-        new_updates, new_returns = calculate_updates(trajectory, gamma)
-        updates += new_updates
-        returns.append(np.mean(new_returns))
-    return updates, returns
-
-
 if __name__ == '__main__':
-    # --- MASTER ---
+    global actions, bins, env, gamma, n_episodes
 
     # environment definition
     env = gym.make('CartPole-v1', render_mode=None)
@@ -110,29 +95,28 @@ if __name__ == '__main__':
     ]
     gamma = 1.0
 
-    # initial policy
-    q, n = initial_policy()
-
     # number of episodes and improvement steps
     n_episodes = 100
     improvement_steps = 100
-    parallelism = 5
+    parallelism = 10
     returns = []
 
     # decaying epsilon
     epsilon = np.logspace(0, -2, improvement_steps, base=10)
 
-    with ServerlessExecutor() as executor:
+    # initial policy
+    q, n = initial_policy()
+
+    # distributed training with Lithops
+    with lithops.FunctionExecutor() as executor:
         for e in epsilon:
-            params_list = [(env, q, e, n_episodes, bins, actions, gamma)] * parallelism
-            results = executor.map(worker_function, params_list)
+            futures = executor.map_reduce(play_episodes, [(q, e)] * parallelism, calculate_updates)
+            results = [future.result() for future in futures]
 
-            updates, new_returns = reducer_function(results)
-            returns.append(np.mean(new_returns))
+            returns += [np.mean(new_returns) for _, new_returns in results]
+            updates = [new_updates for new_updates, _ in results]
 
-            # --- MASTER ---
             q, n = update_policy(q, n, updates)
-            print(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
 
     # plot training results
     plt.plot(returns)
@@ -145,4 +129,4 @@ if __name__ == '__main__':
 
     # test policy
     env = gym.make('CartPole-v1', render_mode='human')
-    play_episodes(env, q, 0.0, 10, bins, actions)
+    play_episodes(q, 0.)
