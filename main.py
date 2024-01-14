@@ -6,8 +6,7 @@ from collections import defaultdict
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
-from tqdm import tqdm
-from lithops import multiprocessing as mp
+from lithops import ServerlessExecutor
 
 
 def initial_policy():
@@ -123,19 +122,17 @@ if __name__ == '__main__':
     # decaying epsilon
     epsilon = np.logspace(0, -2, improvement_steps, base=10)
 
-    with mp.Pool() as pool:
-        for e in (pbar := tqdm(epsilon)):
+    with ServerlessExecutor() as executor:
+        for e in epsilon:
             params_list = [(env, q, e, n_episodes, bins, actions, gamma)] * parallelism
-            results = pool.map(worker_function, params_list)
+            results = executor.map(worker_function, params_list)
 
-        updates, new_returns = reducer_function(results)
-        returns.append(np.mean(new_returns))
+            updates, new_returns = reducer_function(results)
+            returns.append(np.mean(new_returns))
 
-        pbar.set_description(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
-        print(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
-
-        # --- MASTER ---
-        q, n = update_policy(q, n, updates)
+            # --- MASTER ---
+            q, n = update_policy(q, n, updates)
+            print(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
 
     # plot training results
     plt.plot(returns)
