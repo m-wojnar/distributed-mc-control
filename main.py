@@ -1,3 +1,6 @@
+import os
+os.environ['LITHOPS_CONFIG_FILE'] = os.path.join(os.getcwd(), 'config.yaml')
+
 from collections import defaultdict
 
 import gymnasium as gym

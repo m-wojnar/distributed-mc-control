@@ -1,5 +1,6 @@
 lithops:
     backend: gcp_functions
+    storage: gcp_storage
 
 gcp:
     region : europe-west1
