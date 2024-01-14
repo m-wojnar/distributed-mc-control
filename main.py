@@ -53,15 +53,14 @@ def calculate_updates(trajectories):
 
     for trajectory in trajectories:
         first_occurrences = defaultdict(int)
-
-        for i, (state, action, _) in enumerate(trajectory):
+        for i, (state, action, _) in enumerate(trajectory[0]):
             if (state, action) not in first_occurrences:
                 first_occurrences[state, action] = i
 
         updates.append({})
         g = 0
 
-        for i, (state, action, reward) in enumerate(reversed(trajectory)):
+        for i, (state, action, reward) in enumerate(reversed(trajectory[0])):
             g = gamma * g + reward
 
             if i == first_occurrences[state, action]:
@@ -114,8 +113,15 @@ if __name__ == '__main__':
             futures = executor.map_reduce(play_episodes, params, calculate_updates)
             results = [future.result() for future in futures]
 
-            returns += [np.mean(g) for _, g in results]
-            updates = [u for upd, _ in results for u in upd]
+            print(f"RESULTS {results}")
+            updates = []
+            for elem in results:
+                if elem is not None:
+                    returns.append(np.mean(elem[1]))
+            for elem in results:
+                if elem is not None:
+                    for u in elem[0]:
+                        updates.append(u)
             q, n = update_policy(q, n, updates)
 
             print(f"Iteration {i + 1} - epsilon: {e}, mean return: {returns[-1]}")
