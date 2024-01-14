@@ -109,14 +109,16 @@ if __name__ == '__main__':
 
     # distributed training with Lithops
     with lithops.FunctionExecutor() as executor:
-        for e in epsilon:
-            futures = executor.map_reduce(play_episodes, [(q, e)] * parallelism, calculate_updates)
+        for i, e in enumerate(epsilon):
+            params = [(q, e)] * parallelism
+            futures = executor.map_reduce(play_episodes, params, calculate_updates)
             results = [future.result() for future in futures]
 
-            returns += [np.mean(new_returns) for _, new_returns in results]
-            updates = [new_updates for new_updates, _ in results]
-
+            returns += [np.mean(g) for _, g in results]
+            updates = [u for upd, _ in results for u in upd]
             q, n = update_policy(q, n, updates)
+
+            print(f"Iteration {i + 1} - epsilon: {e}, mean return: {returns[-1]}")
 
     # plot training results
     plt.plot(returns)
