@@ -101,8 +101,8 @@ if __name__ == '__main__':
     gamma = 1.0
 
     # number of steps and episodes
-    total_steps = 1000000
-    improvement_steps = 100
+    total_steps = 100
+    improvement_steps = 10
     parallelism = args.parallelism
     n_episodes = total_steps // improvement_steps // parallelism
 
