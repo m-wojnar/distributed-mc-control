@@ -1,15 +1,10 @@
-import os
 import pickle
 import time
-from argparse import ArgumentParser
 from collections import defaultdict
 
 import gymnasium as gym
-import lithops
 import matplotlib.pyplot as plt
 import numpy as np
-
-os.environ['LITHOPS_CONFIG_FILE'] = os.path.join(os.getcwd(), 'config.yaml')
 
 
 def initial_policy():
@@ -83,10 +78,6 @@ def update_policy(q, n, updates):
 
 
 if __name__ == '__main__':
-    args = ArgumentParser()
-    args.add_argument('-p', '--parallelism', type=int, required=True)
-    args = args.parse_args()
-
     global actions, bins, env, gamma, n_episodes
 
     # environment definition
@@ -103,8 +94,8 @@ if __name__ == '__main__':
     # number of steps and episodes
     total_steps = 1000000
     improvement_steps = 100
-    parallelism = args.parallelism
-    n_episodes = total_steps // improvement_steps // parallelism
+    parallelism = 'local'
+    n_episodes = total_steps // improvement_steps
 
     # decaying epsilon
     epsilon = np.logspace(0, -2, improvement_steps, base=10)
@@ -116,30 +107,19 @@ if __name__ == '__main__':
     start = time.time()
     returns = []
 
-    with lithops.ServerlessExecutor() as executor:
-        for i in range(improvement_steps):
-            params = [(q, epsilon[i])] * parallelism
-            results = (executor
-                       .map(play_episodes, params, runtime_memory=2048)
-                       .map(calculate_updates, runtime_memory=2048)
-                       .get_result())
+    for i in range(improvement_steps):
+        results = [calculate_updates(play_episodes(q, epsilon[i]))]
 
-            updates = []
+        updates = []
 
-            for elem in results:
-                if elem is not None:
-                    updates += elem[0]
-                    returns += elem[1]
+        for elem in results:
+            if elem is not None:
+                updates += elem[0]
+                returns += elem[1]
 
-            q, n = update_policy(q, n, updates)
+        q, n = update_policy(q, n, updates)
 
-            print(f"Iteration {i + 1} - epsilon: {epsilon[i]}, mean return: {np.mean(returns[-parallelism * n_episodes:])}")
-
-        executor.wait()
-        executor.plot()
-        plt.tight_layout()
-        plt.savefig(f'lithops_{parallelism}.pdf')
-        plt.clf()
+        print(f"Iteration {i + 1} - epsilon: {epsilon[i]}, mean return: {np.mean(returns[-n_episodes:])}")
 
     end = time.time()
 
