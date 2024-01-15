@@ -1,9 +1,15 @@
+import os
+import pickle
+import time
+from argparse import ArgumentParser
 from collections import defaultdict
 
 import gymnasium as gym
+import lithops
 import matplotlib.pyplot as plt
 import numpy as np
-from tqdm import tqdm
+
+os.environ['LITHOPS_CONFIG_FILE'] = os.path.join(os.getcwd(), 'config.yaml')
 
 
 def initial_policy():
@@ -12,15 +18,15 @@ def initial_policy():
     return q, n
 
 
-def policy(q, state, actions, epsilon):
+def policy(q, state, epsilon):
     values = np.array([q[state, action] for action in actions])
     probs = (values == np.max(values)).astype(float)
     probs /= np.sum(probs)
     probs = probs * (1 - epsilon) + epsilon / len(actions)
-    return dict(zip(actions, probs))
+    return probs
 
 
-def play_episodes(env, q, epsilon, n_episodes, bins, actions):
+def play_episodes(q, epsilon):
     trajectories = []
 
     for episode in range(n_episodes):
@@ -29,10 +35,9 @@ def play_episodes(env, q, epsilon, n_episodes, bins, actions):
 
         while True:
             state = tuple(map(lambda x: np.digitize(*x), zip(state, bins)))
-            probs = policy(q, state, actions, epsilon)
-            action = np.random.choice(actions, p=list(probs.values())).item()
 
-            env.render()
+            probs = policy(q, state, epsilon)
+            action = np.random.choice(actions, p=probs).item()
             next_state, reward, terminated, truncated, _ = env.step(action)
 
             trajectories[-1].append((state, action, reward))
@@ -44,13 +49,12 @@ def play_episodes(env, q, epsilon, n_episodes, bins, actions):
     return trajectories
 
 
-def calculate_updates(trajectories, gamma):
+def calculate_updates(trajectories):
     updates = []
     returns = []
 
     for trajectory in trajectories:
         first_occurrences = defaultdict(int)
-
         for i, (state, action, _) in enumerate(trajectory):
             if (state, action) not in first_occurrences:
                 first_occurrences[state, action] = i
@@ -79,7 +83,11 @@ def update_policy(q, n, updates):
 
 
 if __name__ == '__main__':
-    # --- MASTER ---
+    args = ArgumentParser()
+    args.add_argument('-p', '--parallelism', type=int, required=True)
+    args = args.parse_args()
+
+    global actions, bins, env, gamma, n_episodes
 
     # environment definition
     env = gym.make('CartPole-v1', render_mode=None)
@@ -92,47 +100,66 @@ if __name__ == '__main__':
     ]
     gamma = 1.0
 
-    # initial policy
-    q, n = initial_policy()
-
-    # number of episodes and improvement steps
-    n_episodes = 100
+    # number of steps and episodes
+    total_steps = 1000000
     improvement_steps = 100
-    parallelism = 5
-    returns = []
+    parallelism = args.parallelism
+    n_episodes = total_steps // improvement_steps // parallelism
 
     # decaying epsilon
     epsilon = np.logspace(0, -2, improvement_steps, base=10)
 
-    for e in (pbar := tqdm(epsilon)):
-        # --- MONTE CARLO NODES ---
-        trajectories = []
+    # initial policy
+    q, n = initial_policy()
 
-        for _ in range(parallelism):  # <- in parallel
-            trajectories.append(play_episodes(env, q, e, n_episodes, bins, actions))
+    # distributed training with Lithops
+    start = time.time()
+    returns = []
 
-        # --- REDUCER NODES ---
-        updates = []
+    with lithops.ServerlessExecutor() as executor:
+        for i in range(improvement_steps):
+            params = [(q, epsilon[i])] * parallelism
+            results = (executor
+                       .map(play_episodes, params, runtime_memory=2048)
+                       .map(calculate_updates, runtime_memory=2048)
+                       .get_result())
 
-        for trajectory in trajectories:  # <- in parallel
-            new_updates, new_returns = calculate_updates(trajectory, gamma)
-            updates += new_updates
-            returns.append(np.mean(new_returns))
+            updates = []
 
-        pbar.set_description(f'epsilon: {e:.3f}, return: {returns[-1]:.3f}')
+            for elem in results:
+                if elem is not None:
+                    updates += elem[0]
+                    returns += elem[1]
 
-        # --- MASTER ---
-        q, n = update_policy(q, n, updates)
+            q, n = update_policy(q, n, updates)
+
+            print(f"Iteration {i + 1} - epsilon: {epsilon[i]}, mean return: {np.mean(returns[-parallelism * n_episodes:])}")
+
+        executor.wait()
+        executor.plot()
+        plt.tight_layout()
+        plt.savefig(f'lithops_{parallelism}.pdf')
+        plt.clf()
+
+    end = time.time()
+
+    # save training time
+    with open(f'time_{parallelism}.txt', 'w') as f:
+        f.write(f'{end - start}')
+
+    # save policy
+    with open(f'q_{parallelism}.pkl', 'wb') as f:
+        pickle.dump(q, f)
+
+    with open(f'n_{parallelism}.pkl', 'wb') as f:
+        pickle.dump(n, f)
 
     # plot training results
-    plt.plot(returns)
-    plt.xlabel('Improvement step')
-    plt.ylabel('Mean return')
+    plt.style.use('default')
+    plt.plot(np.array(returns).reshape(-1, 1000).mean(axis=1))
+    plt.xlabel(r'Step ($\times 1000$)')
+    plt.ylabel('Average return')
     plt.grid()
     plt.tight_layout()
-    plt.savefig('return.pdf')
-    plt.show()
-
-    # test policy
-    env = gym.make('CartPole-v1', render_mode='human')
-    play_episodes(env, q, 0.0, 10, bins, actions)
+    plt.savefig(f'returns_{parallelism}.pdf')
+    plt.clf()
