@@ -8,7 +8,7 @@ The repository contains an implementation of a distributed reinforcement learnin
 
 - **Distributed training**: Utilizes the Lithops serverless computing framework to distribute the training process across multiple nodes.
 - **CartPole environment**: Applies the CartPole environment from the Gymnasium library, providing a simple yet effective scenario for reinforcement learning.
-- **Policy iteration updates**: Utilizes policy iteration updates based on the Monte Carlo method to improve the policy iteratively. **Attention!** The agent uses an on-policy method, so with a high step-to-update ratio, you can expect unstable training.
+- **Policy iteration updates**: Utilizes policy iteration updates with the Monte Carlo Control method. **Attention!** The agent uses an on-policy learning, so with a high step-to-update ratio, you can expect unstable training.
 - **Decaying $\varepsilon$-greedy policy**: Implements an epsilon-greedy exploration strategy with a decaying epsilon value over iterations to balance exploration and exploitation.
 
 ## Structure
@@ -35,4 +35,4 @@ python main.py -p <parallelism_level>
 ## Additional Notes
 
 - The CartPole environment is defined with specific bin configurations for state discretization, influencing the agent's observations. **Attention!:** If you want to use a different continuous state space environment, you need to adjust the buckets accordingly.
-- The $\varepsilon$ value decays logarithmically over the training iterations to shift focus from exploration to exploitation gradually.
+- Lithops requires a backend from a cloud service provider to fully utilize its capabilities. To use this implementation, you must provide project configuration from your cloud provider.
